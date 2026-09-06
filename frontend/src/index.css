@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --color-surface: #06081a;
+  --animate-float: float 8s ease-in-out infinite;
+}
+
+body {
+  background-color: #06081a;
+  color: #f8fafc;
+  font-family: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Ambient gradient orbs floating in the background */
+.bg-orb {
+  position: fixed;
+  border-radius: 9999px;
+  filter: blur(120px);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) translateX(0) scale(1); }
+  50% { transform: translateY(-30px) translateX(20px) scale(1.05); }
+}
