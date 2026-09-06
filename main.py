@@ -17,7 +17,15 @@ PASSWORD = os.getenv("NEO4J_PASSWORD")
 
 # Groq Configuration (AI edge inference)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# Groq's model catalog varies per account/date; fall through until one is usable.
+GROQ_MODEL_FALLBACKS = [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.6-27b",
+    "meta-llama/llama-3.3-70b-versatile",
+    "llama-3.3-70b-versatile",
+]
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -186,34 +194,50 @@ def export_graph():
 
 def _groq_chat(user_content: str) -> str:
     """Call Groq's OpenAI-compatible chat completions API using stdlib only."""
-    body = json.dumps({
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": "You curate a personal knowledge graph. Output ONLY valid JSON with no markdown."},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.4,
-        "max_tokens": 4000,
-    }).encode("utf-8")
+    candidate_models = []
+    if GROQ_MODEL:
+        candidate_models.append(GROQ_MODEL)
+    for m in GROQ_MODEL_FALLBACKS:
+        if m not in candidate_models:
+            candidate_models.append(m)
 
-    req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        return payload["choices"][0]["message"]["content"]
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        raise HTTPException(status_code=502, detail=f"Groq API error {e.code}: {detail[:300]}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Groq request failed: {e}")
+    last_err = None
+    for model in candidate_models:
+        body = json.dumps({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You curate a personal knowledge graph. Output ONLY valid JSON with no markdown."},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.4,
+            "max_tokens": 4000,
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "User-Agent": "authority-graph/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            return payload["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            if e.code == 404 and "does not exist" in detail:
+                last_err = f"{model}: {detail[:160]}"
+                continue
+            raise HTTPException(status_code=502, detail=f"Groq API error {e.code} ({model}): {detail[:300]}")
+        except Exception as e:
+            last_err = str(e)
+            continue
+
+    raise HTTPException(status_code=502, detail=f"Groq model unavailable: {last_err}")
 
 @app.post("/insights/suggest")
 def suggest_connections():
